@@ -1,0 +1,602 @@
+#!/bin/sh
+#
+# Copyright (c) 2015 Ederson Moura <ederbsd@gmail.com>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer
+#    in this position and unchanged.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+# 3. The name of the author may not be used to endorse or promote products
+#    derived from this software without specific prior written permission
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+# NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+# Set misc variables.
+URL_CDE='http://git.code.sf.net/p/cdesktopenv/code cdesktopenv-code'
+HOST_TEST='freebsd.org'
+RC_CONF=/etc/rc.conf
+ON_LINE='OFF'
+PKG_INSTALL=''
+IS_MENU=0
+IS_INSTALL=0
+TMP_DIR=/tmp
+CDE_PATH=${TMP_DIR}/cdesktopenv-code/cde
+
+# Set compiler default.
+CC_COMPILER=clang
+CXX_COMPILER=clang++
+
+# Set colors.
+COLOR_GREEN='\033[0;32m'
+COLOR_RED='\033[0;31m'
+COLOR_ORANGE='\033[0;33m'
+COLOR_CYAN='\033[0;35m'
+COLOR_WHITE='\033[0;37m'
+COLOR_NONE='\033[0m'
+
+#
+# Used to check for internet connection.
+#
+check_online() {
+    echo -e "GET http://${HOST_TEST} HTTP/1.0\n\n" | nc ${HOST_TEST} 80 > /dev/null 2>&1
+
+    if [ $? -eq 0 ]
+    then
+        ON_LINE='ON'
+    else
+        ON_LINE='OFF'
+    fi
+}
+
+#
+# Detect the OS platform.
+#
+check_os_type() {
+    os="`uname`"
+    case $os in
+    'FreeBSD') return ;;
+    *) printf "Sorry! Operating system ${COLOR_RED}(${os})${COLOR_NONE} not supported in this program."; exit 1 ;;
+    esac
+}
+
+#
+# Showing a spinner progress for long running tasks. 
+#
+start_spinner() {
+    sp='/-\|'
+    printf ' '
+    while true; do
+        printf '\b%.1s' "$sp"
+        sp=${sp#?}${sp%???}
+    done
+}
+
+#
+# Verify and configure the services that are used by the CDE.
+#
+check_services() {
+    printf '______________________________________________________________________\n\n'
+    printf "*** ${COLOR_CYAN}CDE${COLOR_NONE} - Checking and Starting Necessary Services ***\n\n"
+
+    if grep "hald_enable=\"YES\"" ${RC_CONF} > /dev/null || 
+       grep "hald_enable='YES'" ${RC_CONF} > /dev/null ||
+       grep "hald_enable=YES" ${RC_CONF} > /dev/null
+    then
+        printf "Restart ${COLOR_ORANGE}hald${COLOR_NONE} service:\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        /usr/local/etc/rc.d/hald restart
+        echo -e 
+    else
+        printf "Start ${COLOR_ORANGE}hald${COLOR_NONE} service:\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        echo "hald_enable='YES'" >> ${RC_CONF}
+        /usr/local/etc/rc.d/hald start
+        echo -e
+    fi
+
+    if grep "dbus_enable=\"YES\"" ${RC_CONF} > /dev/null ||
+       grep "dbus_enable='YES'" ${RC_CONF} > /dev/null ||
+       grep "dbus_enable=YES" ${RC_CONF} > /dev/null
+    then
+        printf "Restart ${COLOR_ORANGE}dbus${COLOR_NONE} service:\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        /usr/local/etc/rc.d/dbus restart
+        echo -e
+    else
+        printf "Start ${COLOR_ORANGE}dbus${COLOR_NONE} service:\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        echo "dbus_enable='YES'" >> ${RC_CONF}
+        /usr/local/etc/rc.d/dbus start
+        echo -e
+    fi
+
+    if grep "rpcbind_enable=\"YES\"" ${RC_CONF} > /dev/null ||
+       grep "rpcbind_enable='YES'" ${RC_CONF} > /dev/null ||
+       grep "rpcbind_enable=YES" ${RC_CONF} > /dev/null
+    then
+        printf "Restart ${COLOR_ORANGE}rpc${COLOR_NONE} service:\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        /etc/rc.d/rpcbind restart
+        echo -e
+    else
+        printf "Start ${COLOR_ORANGE}rpc${COLOR_NONE} service:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        echo "rpcbind_enable='YES'" >> ${RC_CONF}
+        /etc/rc.d/rpcbind start
+        echo -e
+    fi
+
+    if [ ${IS_MENU} -eq 1 ]
+    then
+        echo -e "${COLOR_WHITE}Please press ${COLOR_RED}enter to return${COLOR_NONE} to the menu."
+        read opt
+    fi
+}
+
+#
+# It is build installing packages from the ports.
+#
+pkg_install() {
+    p_choice=''
+    p_continue=0
+
+    while [ "${p_choice}" != "q" ]
+    do
+        printf "\nYou want to install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} now? [y/N]: "
+        read p_choice
+        case ${p_choice} in
+        'y'|'Y') p_continue=1 && break ;;
+        'n'|'N') p_continue=0 && break ;;
+        *)  printf "Sorry! Option ${COLOR_ORANGE}${p_choice}${COLOR_NONE} is invalid.\n" && p_continue=0 && continue ;;
+    esac
+    done
+
+    if [ ${p_continue} -eq 1 ]
+    then
+        pkg_patch=`which pkg`
+        if ! ${pkg_patch} install -y ${PKG_INSTALL}
+        then
+            echo 'Failed.'
+        fi
+        IS_INSTALL=1
+    else
+        IS_INSTALL=0
+    fi
+
+    PKG_INSTALL=''
+}
+
+#
+# Checks for and installs the packages and libraries that are used by the CDE.
+#
+pkg_check() {
+    printf '______________________________________________________________________\n\n'
+    printf "*** ${COLOR_CYAN}CDE${COLOR_NONE} - Check and Install Required Dependencies ***\n\n"
+
+    # Check all packages.
+    git_not_found=0
+    if which git > /dev/null
+    then
+        printf "Looking ${COLOR_ORANGE}git${COLOR_NONE} command in the system:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        git_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}git${COLOR_NONE} command in the system:\t\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        git_not_found=0
+    fi
+
+    xorg_not_found=0
+    if which Xorg > /dev/null
+    then
+        printf "Looking ${COLOR_ORANGE}Xorg${COLOR_NONE} command in the system:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        xorg_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}Xorg${COLOR_NONE} command in the system:\t\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        xorg_not_found=0
+    fi
+
+    iconv_not_found=0
+    if which iconv > /dev/null
+    then
+        printf "Looking ${COLOR_ORANGE}iconv${COLOR_NONE} command in the system:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        iconv_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}iconv${COLOR_NONE} command in the system:\t\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        iconv_not_found=0
+    fi
+
+    bdftopcf_not_found=0
+    if which bdftopcf > /dev/null
+    then
+        printf "Looking ${COLOR_ORANGE}bdftopcf${COLOR_NONE} command in the system:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        bdftopcf_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}bdftopcf${COLOR_NONE} command in the system:\t\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        bdftopcf_not_found=0
+    fi
+
+    ksh93_not_found=0
+    if which ksh93 > /dev/null
+    then
+        printf "Looking ${COLOR_ORANGE}ksh93${COLOR_NONE} command in the system:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        ksh93_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}ksh93${COLOR_NONE} command in the system:\t\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        ksh93_not_found=0
+    fi
+
+    libxp_not_found=0
+    if [ -x /usr/local/lib/libXp.so ]
+    then
+        printf "Looking ${COLOR_ORANGE}libXp${COLOR_NONE} librarie in the system:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        libxp_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}libXp${COLOR_NONE} librarie in the system:\t\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        libxp_not_found=0
+    fi
+
+    upsdaemon_not_found=0
+    if which upsdaemon > /dev/null
+    then
+        printf "Looking ${COLOR_ORANGE}upsdaemon${COLOR_NONE} command in the system:\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        upsdaemon_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}upsdaemon${COLOR_NONE} command in the system:\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        upsdaemon_not_found=0
+    fi
+
+    rexima_not_found=0
+    if which rexima > /dev/null
+    then
+        printf "Looking ${COLOR_ORANGE}rexima${COLOR_NONE} command in the system:\t\t ${COLOR_GREEN}[OK]${COLOR_NONE}\n"
+        rexima_not_found=1
+    else
+        printf "Looking ${COLOR_ORANGE}rexima${COLOR_NONE} command in the system:\t\t ${COLOR_RED}[FAILED]${COLOR_NONE}\n"
+        rexima_not_found=0
+    fi
+
+    # Install all packages.
+    if [ ${git_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='git'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/devel/git && make install ${COLOR_RED}OR${COLOR_NONE} pkg install git\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    if [ ${xorg_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='xorg'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/x11/xorg && make install ${COLOR_RED}OR${COLOR_NONE} pkg install xorg\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    if [ ${iconv_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='iconv'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/converters/iconv && make install ${COLOR_RED}OR${COLOR_NONE} pkg install iconv\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    if [ ${bdftopcf_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='bdftopcf'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/x11-fonts/bdftopcf && make install ${COLOR_RED}OR${COLOR_NONE} pkg install bdftopcf\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    if [ ${ksh93_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='ksh93'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/shells/ksh93 && make install ${COLOR_RED}OR${COLOR_NONE} pkg install ksh93\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    if [ ${libxp_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='open-motif'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/x11-toolkits/open-motif && make install ${COLOR_RED}OR${COLOR_NONE} pkg install open-motif\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    if [ ${upsdaemon_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='upsdaemon'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/sysutil/upsdaemon && make install ${COLOR_RED}OR${COLOR_NONE} pkg install upsdaemon\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    if [ ${rexima_not_found} -eq 0 ]
+    then
+       PKG_INSTALL='rexima'
+       printf "\nPlease proceed before install ${COLOR_ORANGE}${PKG_INSTALL}${COLOR_NONE} with the commands:\n"
+       printf "cd /usr/ports/sysutil/rexima && make install ${COLOR_RED}OR${COLOR_NONE} pkg install rexima\n"
+       pkg_install
+       if [ ${IS_INSTALL} -eq 0 ]
+       then
+       else
+           return
+       fi
+    fi
+
+    # Check this called in menu option.
+    if [ ${IS_MENU} -eq 1 ]
+    then
+        echo -e "\n${COLOR_WHITE}Please press ${COLOR_RED}enter to return${COLOR_NONE} to the menu."
+        read opt
+    else
+        IS_MENU=0
+    fi
+}
+
+#
+# Does the clone of CDE repository.
+#
+git_clone_cde() {
+    rm -rf ${TMP_DIR}/cdesktopenv-code && cd ${TMP_DIR}
+
+    git_patch=`which git` && printf "\n"
+ 
+    if ! ${git_patch} clone ${URL_CDE}
+    then
+        echo 'Failed.'
+    else
+        echo 'Successful.'
+    fi
+}
+
+#
+# Does the CDE installation procedures. 
+#
+cde_install() {
+    printf '______________________________________________________________________\n\n'
+    printf "*** ${COLOR_CYAN}CDE${COLOR_NONE} - Install CDE Common Desktop Environment ***\n"
+
+    p_continue=0
+    if [ -d "/usr/dt" ]
+    then
+        while [ "${p_choice}" != "q" ]
+        do
+            printf "\n${COLOR_RED}Warning!${COLOR_NONE} There is already a ${COLOR_CYAN}CDE${COLOR_NONE} installation! Do you want re-install? [y/N]: "
+            read p_choice
+            case ${p_choice} in
+            'y'|'Y') p_continue=1 && break ;;
+            'n'|'N') p_continue=0 && break ;;
+            *)  printf "Sorry! Option ${COLOR_ORANGE}${p_choice}${COLOR_NONE} is invalid.\n" && p_continue=0 && continue ;;
+        esac
+        done
+
+        if [ ${p_continue} -eq 0 ]
+        then
+            echo -e "\n${COLOR_WHITE}Please press ${COLOR_RED}enter to return${COLOR_NONE} to the menu."
+            read opt
+            return
+        fi
+    fi
+
+    git_clone_cde
+
+    # Starts the installation procedure of the CDE.
+    cd ${CDE_PATH}
+
+    if [ ! -d "${CDE_PATH}" ]
+    then
+         echo 'Error abort...'
+         exit 1
+    fi
+
+    if [ ! -d "${CDE_PATH}/imports/x11/include" ]
+    then
+        mkdir -p ${CDE_PATH}/imports/x11/include
+    fi
+
+    if [ ! -L ${CDE_PATH}/imports/x11/include/X11 ]
+    then
+        ln -s /usr/local/include/X11 imports/x11/include 
+    fi
+
+    if [ ! -L ${CDE_PATH}/imports/x11/include/Xm ]
+    then
+        ln -s /usr/local/include/Xm imports/x11/include
+    fi
+
+    # Make build world CDE.
+    printf "\nThe ${COLOR_CYAN}CDE${COLOR_NONE} is being compiled. You can log output in ${TMP_DIR}/cde-build.log. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
+    start_spinner &
+    CC=${CC_COMPILER} CXX=${CXX_COMPILER} make World >${TMP_DIR}/cde-build.log 2>&1
+    kill "$!" && printf "Done.\n"
+
+    # Install CDE default dir /usr/dt.
+    printf "\nThe installer ${COLOR_CYAN}CDE${COLOR_NONE} are copying the files to /usr/dt. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
+    start_spinner &
+    ${CDE_PATH}/admin/IntegTools/dbTools/installCDE -s ${CDE_PATH} >>${TMP_DIR}/cde-build.log
+    kill "$!" && printf "Done.\n"
+
+    if [ ! -d "/etc/tt" ]
+    then
+        mkdir -p /etc/tt 
+    fi
+
+    # Copy font.
+    cp -rf ${CDE_PATH}/programs/tttypes/types.xdr /etc/tt
+
+    printf "\n${COLOR_GREEN}Congratulations!${COLOR_NONE} The installation of the ${COLOR_CYAN}CDE${COLOR_NONE} was completed.\n"
+
+    cde_after_install
+}
+
+#
+# XXX
+#
+add_script_dtlogin_startup() {
+    cat <<- _EOF_ > /usr/local/etc/rc.d/dtlogin
+#!/bin/sh 
+#
+# PROVIDE: dtlogin
+# REQUIRE: DAEMON
+# KEYWORD: shutdown
+#
+# Add the following to /etc/rc.conf to enable this service
+#
+# dtlogin_enable="YES"
+_EOF_
+
+    chmod +x /usr/local/etc/rc.d/dtlogin
+}
+
+#
+# Perform post installation procedures CDE.
+#
+cde_after_install() {
+    add_script_dtlogin_startup
+
+    p_choice=''
+    p_continue=0
+
+    while [ "${p_choice}" != "q" ]
+    do
+            printf "\nYou want to set the Login Manager ${COLOR_CYAN}CDE${COLOR_NONE} as default? [y/N]: "
+            read p_choice
+            case ${p_choice} in
+            'y'|'Y') p_continue=1 && break ;;
+            'n'|'N') p_continue=0 && break ;;
+            *)  printf "Sorry! Option ${COLOR_ORANGE}${p_choice}${COLOR_NONE} is invalid.\n" && p_continue=0 && continue ;;
+    esac
+    done
+
+    if [ ${p_continue} -eq 0 ]
+    then
+        echo -e "\n${COLOR_WHITE}Please press ${COLOR_RED}enter to return${COLOR_NONE} to the menu."
+        read opt
+        return
+    else
+        if grep "dtlogin_enable=\"YES\"" ${RC_CONF} > /dev/null ||
+           grep "dtlogin_enable='YES'" ${RC_CONF} > /dev/null ||
+           grep "dtlogin_enable=YES" ${RC_CONF} > /dev/null
+        then
+            #echo 'Dtlogin is already set!'
+        else
+            #echo "dtlogin_enable='YES'" >> ${RC_CONF}
+        fi
+    fi
+
+    printf "\n${COLOR_RED}NOTICE: ${COLOR_NONE}\n"
+    printf "\tPlease check if the directive ${COLOR_ORANGE}dtlogin_enable=\"YES\"${COLOR_NONE} was set in your ${COLOR_ORANGE}/etc/rc.conf${COLOR_NONE}.\n"
+    printf "\tYou can start the Login Manager ${COLOR_CYAN}CDE${COLOR_NONE} triggering the command:\n\n"
+    printf "\t/usr/local/etc/rc.d/dtlogin start\n\n"
+    printf "\t${COLOR_RED}OR${COLOR_NONE}\n\n"
+    printf "\tStart an X session as a normal user, triggering the command:\n\n"
+    printf "\tenv LANG=C startx /usr/dt/bin/Xsession\n"
+
+    echo -e "\n${COLOR_WHITE}Please press ${COLOR_RED}enter to return${COLOR_NONE} to the menu."
+    read opt
+}
+
+#
+# Print the menu and makes reading option.
+#
+print_menu() {
+    echo -e "${COLOR_GREEN}*****************************************************************${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}**${COLOR_WHITE} 1)${COLOR_GREEN} Install CDE Common Desktop Environment ${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}**${COLOR_WHITE} 2)${COLOR_GREEN} Checking and Starting Necessary Services ${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}**${COLOR_WHITE} 3)${COLOR_GREEN} Check and Install Required Dependencies ${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}*****************************************************************${COLOR_NONE}"
+    echo -e "${COLOR_WHITE}Please enter a menu option and enter or ${COLOR_RED}enter to exit.${COLOR_NONE}"
+    read opt
+}
+
+#
+# Does the loop and print the menu with the options.
+#
+loop_menu() {
+    clear
+    print_menu
+    while [ "${opt}" != "" ]
+    do
+        if [ ${opt} = "" ]
+        then
+            exit 1
+        else
+            case $opt in
+            '1') IS_MENU=0 && cde_install &&
+                 clear && print_menu; ;;
+            '2') IS_MENU=1 && check_services &&
+                 clear && print_menu; ;;
+            '3') IS_MENU=1; pkg_check &&
+                 clear && print_menu ;;
+            *) clear && exit 0; ;;
+    esac
+        fi
+    done
+}
+
+#
+# Main
+#
+check_os_type
+
+if [ "$(id -u)" != "0" ]; then
+   printf "Sorry, you must login as ${COLOR_RED}root${COLOR_NONE} user to continue.\n" 1>&2
+   exit 1
+fi
+
+check_online
+
+if [ "${ON_LINE}" == "OFF" ]
+then
+    printf "Sorry, I could not communicate with the host: ${COLOR_RED}${HOST_TEST}${COLOR_NONE}. Please check internet connection!\n" 
+    exit 1
+fi
+
+loop_menu
+
