@@ -453,7 +453,7 @@ cde_install() {
     printf "\nThe installer ${COLOR_CYAN}CDE${COLOR_NONE} are copying the files to /usr/dt. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
     start_spinner &
     ${CDE_PATH}/admin/IntegTools/dbTools/installCDE -s ${CDE_PATH} >>${TMP_DIR}/cde-build.log
-    kill "$!" && printf "\nDone.\n"
+    kill "$!" && printf "Done.\n"
 
     if [ ! -d "/etc/tt" ]
     then
