@@ -28,6 +28,7 @@
 #
 
 # Set misc variables.
+MY_VERSION='1.0'
 URL_CDE='http://git.code.sf.net/p/cdesktopenv/code cdesktopenv-code'
 HOST_TEST='freebsd.org'
 RC_CONF=/etc/rc.conf
@@ -51,9 +52,38 @@ COLOR_WHITE='\033[0;37m'
 COLOR_NONE='\033[0m'
 
 #
+# Print version.
+#
+print_version() {
+    printf '_________________________________________________________________________\n\n'
+    printf "*** ${COLOR_CYAN}CDE${COLOR_NONE} - Check Version Of the Program ***\n\n"
+
+    printf "Description:\n"
+    printf "    This program was created to facilitate the installation of CDE.\n"
+    printf "\nUsage Menu: \n"
+    printf "    Option 1 - It makes complete installation of CDE on your system.\n"
+    printf "    Option 2 - Only check the necessary services that are used by CDE.\n"
+    printf "    Option 3 - Only checks and install necessary dependencies that are used by CDE.\n"
+    printf "    Option 4 - Display version and the detailed use of this program.\n\n"
+    printf "CDE-NOSTALGIC\n"
+    printf "    Version ${COLOR_CYAN}${MY_VERSION}${COLOR_NONE}. ${COLOR_RED}A simple contribution to anyone who loves the\n"
+    printf "    CDE - Common Desktop Environment, the classic UNIX desktop.${COLOR_NONE}\n\n"
+    printf "Copyright (C) 2015\n"
+    printf "    Ederson Moura <ederbsd@gmail.com>.\n\n"
+
+    echo -e "${COLOR_WHITE}Please press ${COLOR_RED}enter to return${COLOR_NONE} to the menu."
+    read opt
+}
+
+
+#
 # Used to check for internet connection.
 #
 check_online() {
+    clear && 
+    printf "\nChecking network connection. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
+    start_spinner &
+
     echo -e "GET http://${HOST_TEST} HTTP/1.0\n\n" | nc ${HOST_TEST} 80 > /dev/null 2>&1
 
     if [ $? -eq 0 ]
@@ -62,6 +92,8 @@ check_online() {
     else
         ON_LINE='OFF'
     fi
+
+    kill "$!"
 }
 
 #
@@ -91,7 +123,7 @@ start_spinner() {
 # Verify and configure the services that are used by the CDE.
 #
 check_services() {
-    printf '______________________________________________________________________\n\n'
+    printf '_________________________________________________________________________\n\n'
     printf "*** ${COLOR_CYAN}CDE${COLOR_NONE} - Checking and Starting Necessary Services ***\n\n"
 
     if grep "hald_enable=\"YES\"" ${RC_CONF} > /dev/null || 
@@ -180,7 +212,7 @@ pkg_install() {
 # Checks for and installs the packages and libraries that are used by the CDE.
 #
 pkg_check() {
-    printf '______________________________________________________________________\n\n'
+    printf '_________________________________________________________________________\n\n'
     printf "*** ${COLOR_CYAN}CDE${COLOR_NONE} - Check and Install Required Dependencies ***\n\n"
 
     # Check all packages.
@@ -399,7 +431,7 @@ git_clone_cde() {
 # Does the CDE installation procedures. 
 #
 cde_install() {
-    printf '______________________________________________________________________\n\n'
+    printf '_________________________________________________________________________\n\n'
     printf "*** ${COLOR_CYAN}CDE${COLOR_NONE} - Install CDE Common Desktop Environment ***\n"
 
     p_continue=0
@@ -451,16 +483,23 @@ cde_install() {
     fi
 
     # Make build world CDE.
-    printf "\nThe ${COLOR_CYAN}CDE${COLOR_NONE} is being compiled. You can log output in ${TMP_DIR}/cde-build.log. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
+    start=`date +%s`
+    printf "\nThe ${COLOR_CYAN}CDE${COLOR_NONE} is being compiled. You can log output in ${TMP_DIR}/cde-build.log." 
+    printf "\nCompilation started in ${COLOR_RED}${start}${COLOR_NONE}. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
+
     start_spinner &
     CC=${CC_COMPILER} CXX=${CXX_COMPILER} make World >${TMP_DIR}/cde-build.log 2>&1
-    kill "$!" && printf "Done.\n"
+    kill "$!" && printf "\nDone.\n"
+
+    end=`date +%s`
+    elapsed=$(( ${end} - ${start} ))
+    printf "\nCompilation completed in: ${COLOR_RED}${end}${COLOR_NONE}. Time elapsed: ${COLOR_RED}${elapsed}${COLOR_NONE}."
 
     # Install CDE default dir /usr/dt.
     printf "\nThe installer ${COLOR_CYAN}CDE${COLOR_NONE} are copying the files to /usr/dt. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
     start_spinner &
     ${CDE_PATH}/admin/IntegTools/dbTools/installCDE -s ${CDE_PATH} >>${TMP_DIR}/cde-build.log
-    kill "$!" && printf "Done.\n"
+    kill "$!" && printf "\nDone.\n"
 
     if [ ! -d "/etc/tt" ]
     then
@@ -476,7 +515,7 @@ cde_install() {
 }
 
 #
-# XXX
+# Create and add script start dtlogin. 
 #
 add_script_dtlogin_startup() {
     cat <<- _EOF_ > /usr/local/etc/rc.d/dtlogin
@@ -492,6 +531,20 @@ add_script_dtlogin_startup() {
 _EOF_
 
     chmod +x /usr/local/etc/rc.d/dtlogin
+}
+
+#
+# Cleaning up unnecessary files.
+#
+clean_files() {
+    printf "\nCleaning up unnecessary files. ${COLOR_ORANGE}Please wait: ${COLOR_NONE}"
+    start_spinner &
+
+    [ -f ${TMP_DIR}/cde-build.log ] && rm -f ${TMP_DIR}/cde-build.log
+    [ -d ${TMP_DIR}/cdesktopenv-code ] && rm -rf ${TMP_DIR}/cdesktopenv-code
+    rm -rf ${TMP_DIR}/CDE-*
+
+    kill "$!" && clear
 }
 
 #
@@ -546,11 +599,13 @@ cde_after_install() {
 # Print the menu and makes reading option.
 #
 print_menu() {
-    echo -e "${COLOR_GREEN}*****************************************************************${COLOR_NONE}"
-    echo -e "${COLOR_GREEN}**${COLOR_WHITE} 1)${COLOR_GREEN} Install CDE Common Desktop Environment ${COLOR_NONE}"
-    echo -e "${COLOR_GREEN}**${COLOR_WHITE} 2)${COLOR_GREEN} Checking and Starting Necessary Services ${COLOR_NONE}"
-    echo -e "${COLOR_GREEN}**${COLOR_WHITE} 3)${COLOR_GREEN} Check and Install Required Dependencies ${COLOR_NONE}"
-    echo -e "${COLOR_GREEN}*****************************************************************${COLOR_NONE}"
+    echo -e
+    echo -e "${COLOR_GREEN}+-----------------------------------------------------------------------+${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}|${COLOR_WHITE} 1)${COLOR_GREEN} Install CDE Common Desktop Environment \t\t\t\t|${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}|${COLOR_WHITE} 2)${COLOR_GREEN} Checking and Starting Necessary Services \t\t\t\t|${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}|${COLOR_WHITE} 3)${COLOR_GREEN} Check and Install Required Dependencies \t\t\t\t|${COLOR_NONE}"
+    echo -e "${COLOR_GRREN}|${COLOR_WHITE} 4)${COLOR_GREEN} Check Version Of the Program \t\t\t\t\t|${COLOR_NONE}"
+    echo -e "${COLOR_GREEN}+-----------------------------------------------------------------------+${COLOR_NONE}"
     echo -e "${COLOR_WHITE}Please enter a menu option and enter or ${COLOR_RED}enter to exit.${COLOR_NONE}"
     read opt
 }
@@ -574,6 +629,8 @@ loop_menu() {
                  clear && print_menu; ;;
             '3') IS_MENU=1; pkg_check &&
                  clear && print_menu ;;
+            '4') IS_MENU=0 && print_version &&
+                 clear && print_menu ;;
             *) clear && exit 0; ;;
     esac
         fi
@@ -583,6 +640,8 @@ loop_menu() {
 #
 # Main
 #
+trap "clean_files; exit 1" SIGHUP SIGINT SIGTERM
+
 check_os_type
 
 if [ "$(id -u)" != "0" ]; then
@@ -598,5 +657,6 @@ then
     exit 1
 fi
 
-loop_menu
+loop_menu && clean_files
 
+exit 0
